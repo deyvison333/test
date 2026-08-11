@@ -1,81 +1,80 @@
 - name: Monta compartilhamento DFS em uma letra de unidade (Z:)
-  ansible.windows.win_shell: |
-    New-PSDrive -Name K -PSProvider FileSystem -Root \\10.2.116.4\dfstest$ -Credential (New-Object System.Management.Automation.PSCredential('EURO\OPS2AWIRPAINF', (ConvertTo-SecureString '{{ ansible_password }}' -AsPlainText -Force)))
+  ansible.windows.win_shell:
+    cmd: |
+      New-PSDrive -Name K -PSProvider FileSystem -Root \\10.2.116.4\dfstest$ -Credential (New-Object System.Management.Automation.PSCredential('EURO\OPS2AWIRPAINF', (ConvertTo-SecureString '{{ ansible_password }}' -AsPlainText -Force)))
 
-    # Execution mode: xml or zip
-    $runMode = "{{ run_mode }}"
-    Write-Host "`n[INFO] Execution mode: $runMode"
+      # Execution mode: xml or zip
+      $runMode = "{{ run_mode }}"
+      Write-Host "`n[INFO] Execution mode: $runMode"
 
-    # Source paths - copying all XML files
-    $sourcePaths = @(
-      "C:\apps\rpa\*\configuration\*.xml",
-      "C:\apps\rpa\*\config\*.xml"
-    )
+      # Source paths - copying all XML files
+      $sourcePaths = @(
+        "C:\apps\rpa\*\configuration\*.xml",
+        "C:\apps\rpa\*\config\*.xml"
+      )
 
-    # Destination path (DFS share or UNC)
-    $destinationShare = "K:\APS\Deyv\RPA_CONFIGS"
+      # Destination path (DFS share or UNC)
+      $destinationShare = "K:\APS\Deyv\RPA_CONFIGS"
 
-    # Current host name
-    $hostname = $env:COMPUTERNAME
+      # Current host name
+      $hostname = $env:COMPUTERNAME
 
-    if ($runMode -eq "xml") {
-        Write-Host "`n[INFO] Source paths:"
-        $sourcePaths | ForEach-Object { Write-Host " $_" }
+      if ($runMode -eq "xml") {
+          Write-Host "`n[INFO] Source paths:"
+          $sourcePaths | ForEach-Object { Write-Host " $_" }
 
-        # Loop for each source pattern
-        foreach ($path in $sourcePaths) {
-            Write-Host "`n[INFO] Searching files in: $path"
-            $files = Get-ChildItem -Path $path -Recurse -ErrorAction SilentlyContinue
+          foreach ($path in $sourcePaths) {
+              Write-Host "`n[INFO] Searching files in: $path"
+              $files = Get-ChildItem -Path $path -Recurse -ErrorAction SilentlyContinue
 
-            if ($files.Count -eq 0) {
-              Write-Host " No files found in $path"
-            }
-
-            foreach ($file in $files) {
-              $sourceFile = $file.FullName
-              $fileName = $file.Name
-
-              # Find the intermediate folder between 'rpa' and 'config' or 'configuration'
-              # Example: "C:\apps\rpa\financeiro\config\config.xml"
-              $intermediateFolder = ($sourceFile -split "\\rpa\\")[1] -split "\\(config|configuration)\\" | Select-Object -First 1
-
-              # Final subfolder name: <hostname>_<intermediateFolder>
-              $folderName = "${intermediateFolder}_${hostname}"
-              $destinationFolder = "$destinationShare\$folderName"
-
-              # Create the subfolder if it doesn't exist yet
-              if (!(Test-Path -Path $destinationFolder)) {
-                Write-Host " Creating folder: $destinationFolder"
-                New-Item -Path $destinationFolder -ItemType Directory -Force | Out-Null
+              if ($files.Count -eq 0) {
+                Write-Host " No files found in $path"
               }
 
-              $destinationPath = Join-Path -Path $destinationFolder -ChildPath $fileName
+              foreach ($file in $files) {
+                $sourceFile = $file.FullName
+                $fileName = $file.Name
 
-              Write-Host " -> Copying: $sourceFile"
-              Write-Host " To: $destinationPath"
+                # Find the intermediate folder between 'rpa' and 'config' or 'configuration'
+                # Example: "C:\apps\rpa\financeiro\config\config.xml"
+                $intermediateFolder = ($sourceFile -split "\\rpa\\")[1] -split "\\(config|configuration)\\" | Select-Object -First 1
 
-              Copy-Item -Path $sourceFile -Destination $destinationPath -Force
-            }
-        }
-    }
-    elseif ($runMode -eq "zip") {
-        # Compress the entire rpa folder and copy it to the destination
-        $rpaFolder = "C:\apps\rpa"
-        $zipName = "$hostname.zip"
-        $zipPath = "$env:TEMP\$zipName"
+                # Final subfolder name: <hostname>_<intermediateFolder>
+                $folderName = "${intermediateFolder}_${hostname}"
+                $destinationFolder = "$destinationShare\$folderName"
 
-        Write-Host "`n[INFO] Compressing folder $rpaFolder to $zipPath"
-        if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-        Compress-Archive -Path "$rpaFolder\*" -DestinationPath $zipPath -Force
+                if (!(Test-Path -Path $destinationFolder)) {
+                  Write-Host " Creating folder: $destinationFolder"
+                  New-Item -Path $destinationFolder -ItemType Directory -Force | Out-Null
+                }
 
-        $zipDestinationPath = Join-Path -Path $destinationShare -ChildPath $zipName
-        Write-Host "[INFO] Copying zip to: $zipDestinationPath"
-        Copy-Item -Path $zipPath -Destination $zipDestinationPath -Force
-    }
-    else {
-        Write-Host "`n[ERROR] Invalid run_mode: '$runMode'. Use 'xml' or 'zip'."
-    }
+                $destinationPath = Join-Path -Path $destinationFolder -ChildPath $fileName
 
-    Remove-PSDrive -Name K
+                Write-Host " -> Copying: $sourceFile"
+                Write-Host " To: $destinationPath"
+
+                Copy-Item -Path $sourceFile -Destination $destinationPath -Force
+              }
+          }
+      }
+      elseif ($runMode -eq "zip") {
+          # Compress the entire rpa folder and copy it to the destination
+          $rpaFolder = "C:\apps\rpa"
+          $zipName = "$hostname.zip"
+          $zipPath = "$env:TEMP\$zipName"
+
+          Write-Host "`n[INFO] Compressing folder $rpaFolder to $zipPath"
+          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+          Compress-Archive -Path "$rpaFolder\*" -DestinationPath $zipPath -Force
+
+          $zipDestinationPath = Join-Path -Path $destinationShare -ChildPath $zipName
+          Write-Host "[INFO] Copying zip to: $zipDestinationPath"
+          Copy-Item -Path $zipPath -Destination $zipDestinationPath -Force
+      }
+      else {
+          Write-Host "`n[ERROR] Invalid run_mode: '$runMode'. Use 'xml' or 'zip'."
+      }
+
+      Remove-PSDrive -Name K
 
   register: mount_output
