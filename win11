@@ -1,0 +1,85 @@
+---
+# ==========================================================================
+# migrate_restore_rpa.yml
+#
+# TEMPORARY migration playbook.
+# Restores the RPA zip backup (created by the existing backup playbook)
+# from the DFS share onto the NEW machine.
+#
+# No host_vars needed. The old->new hostname mapping lives in a single
+# CSV file (migration_mapping.csv), with columns:
+#
+#   new_hostname,old_hostname
+#   NEWAPP01,OLDAPP07
+#   NEWAPP02,OLDAPP12
+#
+# For each host targeted by the play, source_hostname is looked up from
+# that CSV using the new machine's inventory_hostname as the key.
+#
+# Usage:
+#   ansible-playbook migrate_restore_rpa.yml -e ansible_password=xxxx \
+#     -e mapping_file=/path/to/migration_mapping.csv
+#
+# This playbook is only expected to be used during the migration window
+# and can be safely removed afterwards, along with the CSV file.
+# ==========================================================================
+
+- name: Restore RPA config zip from DFS to new machine
+  hosts: all
+  gather_facts: no
+
+  vars:
+    mapping_file: "{{ playbook_dir }}/migration_mapping.csv"
+
+  tasks:
+    - name: Look up old hostname for this machine from the migration CSV
+      ansible.builtin.set_fact:
+        source_hostname: "{{ lookup('csvfile', inventory_hostname + ' file=' + mapping_file + ' delimiter=, col=1') }}"
+
+    - name: Fail early if no mapping was found
+      ansible.builtin.fail:
+        msg: "No mapping entry found in {{ mapping_file }} for {{ inventory_hostname }}"
+      when: not source_hostname
+
+    - name: Copy and extract RPA zip from DFS backup
+      ansible.windows.win_shell:
+        cmd: |
+          New-PSDrive -Name K -PSProvider FileSystem -Root \\10.2.116.4\dfstest$ -Credential (New-Object System.Management.Automation.PSCredential('EURO\OPS2AWIRPAINF', (ConvertTo-SecureString '{{ ansible_password }}' -AsPlainText -Force)))
+
+          $sourceHostname = "{{ source_hostname }}"
+          $zipSource = "K:\APS\Deyv\RPA_CONFIGS\$sourceHostname.zip"
+          $localZip = "$env:TEMP\$sourceHostname.zip"
+          $destinationFolder = "C:\apps\rpa"
+
+          Write-Host "`n[INFO] Migrating from source host: $sourceHostname"
+          Write-Host "[INFO] Looking for zip: $zipSource"
+
+          if (!(Test-Path $zipSource)) {
+            Write-Host "[ERROR] Zip not found for source host: $sourceHostname"
+            Remove-PSDrive -Name K
+            exit 1
+          }
+
+          Write-Host "[INFO] Copying zip locally to: $localZip"
+          Copy-Item -Path $zipSource -Destination $localZip -Force
+
+          if (!(Test-Path $destinationFolder)) {
+            Write-Host "[INFO] Creating destination folder: $destinationFolder"
+            New-Item -Path $destinationFolder -ItemType Directory -Force | Out-Null
+          }
+
+          Write-Host "[INFO] Extracting zip to: $destinationFolder"
+          Expand-Archive -Path $localZip -DestinationPath $destinationFolder -Force
+
+          Write-Host "[INFO] Cleaning up local zip"
+          Remove-Item $localZip -Force
+
+          Remove-PSDrive -Name K
+
+          Write-Host "`n[INFO] Migration completed for $sourceHostname -> $env:COMPUTERNAME"
+
+      register: restore_output
+
+    - name: Show restore output
+      ansible.builtin.debug:
+        var: restore_output.stdout_lines
